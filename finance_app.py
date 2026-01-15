@@ -25,17 +25,6 @@ def check_password():
 # Kiểm tra mật khẩu trước khi chạy các phần còn lại của App
 if not check_password():
     st.stop() # Dừng app tại đây nếu chưa đăng nhập thành công
-
-# --- PHẦN CODE CŨ (HIỂN THỊ KHI ĐÃ ĐĂNG NHẬP THÀNH CÔNG) ---
-# (Phần code dưới này giữ nguyên như bản 3.0 của bạn)
-st.title("💰 Finance Dashboard & Ledger")
-# ... tiếp tục các phần load_data, sidebar và hiển thị báo cáo ...
-import streamlit as st
-import pandas as pd
-import os
-import plotly.express as px
-from datetime import datetime
-
 # --- CẤU HÌNH ---
 DATA_FILE = "so_cai_tai_chinh.csv"
 
@@ -109,3 +98,4 @@ if not df.empty:
 else:
 
     st.info("Chưa có dữ liệu.")
+
