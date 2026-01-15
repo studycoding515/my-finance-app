@@ -4,125 +4,109 @@ import plotly.express as px
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
-# --- 1. CẤU HÌNH ---
+# --- 1. HỆ THỐNG BẢO MẬT ---
 PASSWORD = "qltaichinhcanhan"
-# ID file Google Sheets của bạn (Lấy từ link bạn gửi)
-SHEET_ID = "1h0kefkyiK49GyOyZ9OON1U7k2AGynWoc_2mWM-8Oz-I"
-SHEET_NAME = "Transactions" # Tên Tab phải chính xác
-# Đường dẫn ép buộc Google xuất file CSV
-CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&sheet={SHEET_NAME}"
 
-# --- 2. HỆ THỐNG BẢO MẬT ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.title("🔐 Hệ thống bảo mật")
-        pwd = st.text_input("Vui lòng nhập mật khẩu:", type="password")
+        pwd = st.text_input("Mật khẩu:", type="password")
         if st.button("Đăng nhập"):
             if pwd == PASSWORD:
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
-                st.error("❌ Mật khẩu sai!")
+                st.error("Sai mật khẩu!")
         return False
     return True
 
 if not check_password():
     st.stop()
 
-# --- 3. KẾT NỐI (Đọc & Ghi) ---
-# Kết nối dùng để GHI dữ liệu (Vẫn cần cấu hình Secrets)
+# --- 2. KẾT NỐI SERVICE ACCOUNT ---
 conn = st.connection("gsheets", type=GSheetsConnection)
+SHEET_NAME = "Transactions"
 
-def load_data():
-    try:
-        # Cách mới: Đọc trực tiếp từ đường dẫn CSV (Né lỗi 400 của thư viện)
-        df = pd.read_csv(CSV_URL)
-        # Đảm bảo các cột quan trọng luôn tồn tại
-        required_cols = ["Ngày", "Tài khoản", "Loại", "Hạng mục", "Số tiền", "Ghi chú"]
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = "" # Tạo cột trống nếu thiếu
-        return df
-    except Exception as e:
-        st.error(f"⚠️ Không đọc được dữ liệu: {e}")
-        return pd.DataFrame(columns=["Ngày", "Tài khoản", "Loại", "Hạng mục", "Số tiền", "Ghi chú"])
+st.set_page_config(page_title="Finance App", layout="wide")
+st.title("💰 Sổ Cái Tài Chính (Service Account)")
 
-st.set_page_config(page_title="Wallet x QBO", layout="wide")
-st.title("💰 Finance Dashboard (Direct Mode)")
-
-# --- 4. XỬ LÝ DỮ LIỆU ---
-df = load_data()
-
-# --- SIDEBAR: NHẬP LIỆU ---
-with st.sidebar:
-    st.header("📝 Nhập giao dịch")
-    date = st.date_input("Ngày", datetime.now())
-    amount = st.number_input("Số tiền (VND)", min_value=0.0, step=1000.0, format="%.2f")
-    t_type = st.selectbox("Loại", ["Chi phí", "Thu nhập"])
-    category = st.selectbox("Hạng mục", ["Ăn uống", "Lương", "Xăng xe", "Mua sắm", "Giải trí", "Khác"])
-    account = st.selectbox("Tài khoản", ["Tiền mặt", "Vietcombank", "Momo"])
-    note = st.text_input("Ghi chú")
+# --- 3. XỬ LÝ DỮ LIỆU ---
+try:
+    # ttl=0 để luôn lấy dữ liệu mới nhất
+    df = conn.read(worksheet=SHEET_NAME, ttl=0)
+    # Xử lý trường hợp file trống hoặc thiếu cột
+    required_cols = ["Ngày", "Tài khoản", "Loại", "Hạng mục", "Số tiền", "Ghi chú"]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = pd.Series(dtype='object')
+            
+    # Lọc bỏ các dòng trống hoàn toàn (Fix lỗi warning)
+    df = df.dropna(how='all')
+    df = df[required_cols]
     
-    if st.button("Lưu lên Google Sheets", use_container_width=True):
-        # Tạo dòng mới
-        new_row = pd.DataFrame([{
-            "Ngày": date.strftime("%Y-%m-%d"),
-            "Tài khoản": account,
-            "Loại": t_type,
-            "Hạng mục": category,
-            "Số tiền": amount,
-            "Ghi chú": note
-        }])
-        
-        # Nối vào dữ liệu cũ
-        updated_df = pd.concat([df, new_row], ignore_index=True)
-        
-        # Ghi đè lên Google Sheets (Dùng conn để ghi)
-        try:
-            conn.update(worksheet=SHEET_NAME, data=updated_df)
-            st.success("✅ Đã ghi sổ thành công!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Lỗi khi lưu: {e}")
+except Exception as e:
+    st.error(f"⚠️ Lỗi kết nối: {e}")
+    st.stop()
 
-    st.markdown("---")
-    st.header("🗑️ Quản lý")
-    if not df.empty:
-        index_to_delete = st.number_input("STT muốn xóa:", min_value=0, max_value=len(df)-1 if len(df)>0 else 0, step=1)
-        if st.button("Xóa dòng này", type="primary"):
-            updated_df = df.drop(df.index[index_to_delete])
+# --- 4. NHẬP LIỆU ---
+with st.sidebar:
+    st.header("📝 Nhập mới")
+    with st.form("entry_form", clear_on_submit=True):
+        date = st.date_input("Ngày", datetime.now())
+        amount = st.number_input("Số tiền", min_value=0.0, step=1000.0, format="%.0f")
+        t_type = st.selectbox("Loại", ["Chi phí", "Thu nhập"])
+        category = st.selectbox("Hạng mục", ["Ăn uống", "Lương", "Di chuyển", "Nhà cửa", "Khác"])
+        account = st.selectbox("Tài khoản", ["Tiền mặt", "Vietcombank", "Thẻ tín dụng"])
+        note = st.text_input("Ghi chú")
+        
+        submitted = st.form_submit_button("Lưu Giao Dịch")
+        
+        if submitted:
+            new_entry = pd.DataFrame([{
+                "Ngày": date.strftime("%Y-%m-%d"),
+                "Tài khoản": account,
+                "Loại": t_type,
+                "Hạng mục": category,
+                "Số tiền": amount,
+                "Ghi chú": note
+            }])
+            
+            # --- ĐOẠN FIX LỖI FUTUREWARNING ---
+            if df.empty:
+                updated_df = new_entry
+            else:
+                updated_df = pd.concat([df, new_entry], ignore_index=True)
+            
             try:
                 conn.update(worksheet=SHEET_NAME, data=updated_df)
-                st.warning(f"Đã xóa dòng {index_to_delete}")
+                st.success("✅ Đã lưu thành công!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Lỗi khi xóa: {e}")
+                # Nếu lỗi này hiện ra nghĩa là Secrets vẫn chưa chuẩn
+                st.error(f"❌ Lỗi Ghi: {e}")
+                st.info("Hãy kiểm tra lại file Secrets. Đảm bảo bạn đã copy đúng Client Email và Private Key.")
 
 # --- 5. BÁO CÁO ---
 if not df.empty:
-    # Chuyển đổi số tiền phòng khi nó bị hiểu là chữ
+    # Chuyển đổi số tiền an toàn
     df["Số tiền"] = pd.to_numeric(df["Số tiền"], errors='coerce').fillna(0)
     
-    total_income = df[df['Loại'] == 'Thu nhập']['Số tiền'].sum()
-    total_expense = df[df['Loại'] == 'Chi phí']['Số tiền'].sum()
+    income = df[df['Loại'] == 'Thu nhập']['Số tiền'].sum()
+    expense = df[df['Loại'] == 'Chi phí']['Số tiền'].sum()
     
     c1, c2, c3 = st.columns(3)
-    c1.metric("Tổng Thu", f"{total_income:,.0f} đ")
-    c2.metric("Tổng Chi", f"{total_expense:,.0f} đ")
-    c3.metric("Số dư", f"{(total_income - total_expense):,.0f} đ")
-
-    st.markdown("---")
-    col_chart, col_table = st.columns([1, 1])
-
-    with col_chart:
-        st.subheader("📊 Tỷ trọng chi tiêu")
-        df_exp = df[df['Loại'] == 'Chi phí']
-        if not df_exp.empty:
-            fig = px.pie(df_exp, values='Số tiền', names='Hạng mục', hole=0.4)
+    c1.metric("Tổng Thu", f"{income:,.0f} đ")
+    c2.metric("Tổng Chi", f"{expense:,.0f} đ")
+    c3.metric("Số dư", f"{(income - expense):,.0f} đ")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Biểu đồ chi phí")
+        df_chart = df[df['Loại'] == 'Chi phí']
+        if not df_chart.empty:
+            fig = px.pie(df_chart, values='Số tiền', names='Hạng mục', hole=0.4)
             st.plotly_chart(fig, use_container_width=True)
-
-    with col_table:
-        st.subheader("📜 Sổ cái")
-        st.dataframe(df.style.format({"Số tiền": "{:,.0f}"}), use_container_width=True, height=400)
-else:
-    st.info("Chưa có dữ liệu. Hãy đảm bảo file Google Sheets đã có tiêu đề cột!")
+            
+    with col2:
+        st.subheader("Nhật ký")
+        st.dataframe(df.sort_index(ascending=False), use_container_width=True)
