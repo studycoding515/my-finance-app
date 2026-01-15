@@ -1,16 +1,14 @@
 import streamlit as st
 import pandas as pd
-import os
 import plotly.express as px
 from datetime import datetime
+from streamlit_gsheets import GSheetsConnection  # Thư viện kết nối Google Sheets
 
-# --- CẤU HÌNH BẢO MẬT ---
-PASSWORD = "qltaichinhcanhan" # <--- THAY ĐỔI MẬT KHẨU CỦA BẠN TẠI ĐÂY
+# --- 1. CẤU HÌNH BẢO MẬT ---
+PASSWORD = "qltaichinhcanhan"
 
 def check_password():
-    """Trả về True nếu người dùng nhập đúng mật khẩu."""
     if "password_correct" not in st.session_state:
-        # Lần đầu mở app
         st.title("🔐 Hệ thống bảo mật")
         pwd = st.text_input("Vui lòng nhập mật khẩu để truy cập:", type="password")
         if st.button("Đăng nhập"):
@@ -22,22 +20,22 @@ def check_password():
         return False
     return True
 
-# Kiểm tra mật khẩu trước khi chạy các phần còn lại của App
 if not check_password():
-    st.stop() # Dừng app tại đây nếu chưa đăng nhập thành công
-# --- CẤU HÌNH ---
-DATA_FILE = "so_cai_tai_chinh.csv"
+    st.stop()
+
+# --- 2. KẾT NỐI GOOGLE SHEETS ---
+# Khởi tạo kết nối
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        df = pd.DataFrame(columns=["Ngày", "Tài khoản", "Loại", "Hạng mục", "Số tiền", "Ghi chú"])
-        df.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
-    return pd.read_csv(DATA_FILE)
+    # Đọc dữ liệu từ Sheet có tên là 'Transactions'
+    # ttl=0 để đảm bảo mỗi lần load đều lấy dữ liệu mới nhất, không lấy từ bộ nhớ đệm
+    return conn.read(worksheet="Transactions", ttl=0)
 
 st.set_page_config(page_title="Wallet x QBO", layout="wide")
-st.title("💰 Finance Dashboard & Ledger")
+st.title("💰 Finance Dashboard & Ledger (Cloud)")
 
-# --- XỬ LÝ DỮ LIỆU ---
+# --- 3. XỬ LÝ DỮ LIỆU ---
 df = load_data()
 
 # --- THANH SIDEBAR: NHẬP LIỆU ---
@@ -50,11 +48,24 @@ with st.sidebar:
     account = st.selectbox("Tài khoản", ["Tiền mặt", "Vietcombank", "Momo"])
     note = st.text_input("Ghi chú")
     
-    if st.button("Lưu giao dịch", use_container_width=True):
-        new_row = pd.DataFrame([[date, account, t_type, category, amount, note]], 
-                               columns=df.columns)
-        new_row.to_csv(DATA_FILE, mode='a', header=False, index=False, encoding='utf-8-sig')
-        st.success("Đã ghi sổ!")
+    if st.button("Lưu lên Google Sheets", use_container_width=True):
+        # Tạo DataFrame dòng mới
+        new_row = pd.DataFrame([{
+            "Ngày": date.strftime("%Y-%m-%d"),
+            "Tài khoản": account,
+            "Loại": t_type,
+            "Hạng mục": category,
+            "Số tiền": amount,
+            "Ghi chú": note
+        }])
+        
+        # Kết hợp dữ liệu cũ và mới
+        updated_df = pd.concat([df, new_row], ignore_index=True)
+        
+        # Ghi đè toàn bộ dữ liệu mới lên Google Sheets
+        conn.update(worksheet="Transactions", data=updated_df)
+        
+        st.success("✅ Đã ghi sổ lên Google Sheets!")
         st.rerun()
 
     st.markdown("---")
@@ -62,19 +73,22 @@ with st.sidebar:
     if not df.empty:
         index_to_delete = st.number_input("Nhập STT dòng muốn xóa:", min_value=0, max_value=len(df)-1, step=1)
         if st.button("Xóa dòng này", type="primary"):
-            df = df.drop(df.index[index_to_delete])
-            df.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
+            # Xóa dòng theo index
+            updated_df = df.drop(df.index[index_to_delete])
+            # Cập nhật lại Google Sheets
+            conn.update(worksheet="Transactions", data=updated_df)
             st.warning(f"Đã xóa dòng số {index_to_delete}")
             st.rerun()
 
-# --- HIỂN THỊ BÁO CÁO ---
+# --- 4. HIỂN THỊ BÁO CÁO ---
 if not df.empty:
-    # Tính toán KPIs
+    # Chuyển đổi cột Số tiền sang kiểu số (phòng trường hợp Google Sheets trả về string)
+    df["Số tiền"] = pd.to_numeric(df["Số tiền"], errors='coerce')
+    
     total_income = df[df['Loại'] == 'Thu nhập']['Số tiền'].sum()
     total_expense = df[df['Loại'] == 'Chi phí']['Số tiền'].sum()
     
     c1, c2, c3 = st.columns(3)
-    # Định dạng hiển thị số thập phân ở phần Metric
     c1.metric("Tổng Thu", f"{total_income:,.2f} đ")
     c2.metric("Tổng Chi", f"{total_expense:,.2f} đ")
     c3.metric("Số dư", f"{(total_income - total_expense):,.2f} đ")
@@ -91,11 +105,7 @@ if not df.empty:
             st.plotly_chart(fig, use_container_width=True)
 
     with col_table:
-        st.subheader("📜 Nhật ký giao dịch (Sổ cái)")
-        # ĐỊNH DẠNG SỐ THẬP PHÂN TRONG BẢNG:
-        # .style.format("{:,.2f}"): Thêm dấu phẩy hàng ngàn và 2 chữ số thập phân
+        st.subheader("📜 Nhật ký (Google Sheets)")
         st.dataframe(df.style.format({"Số tiền": "{:,.2f}"}), use_container_width=True, height=400)
 else:
-
-    st.info("Chưa có dữ liệu.")
-
+    st.info("Sổ cái trên Google Sheets hiện tại chưa có dữ liệu.")
